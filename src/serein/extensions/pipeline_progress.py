@@ -1,9 +1,18 @@
 """Backlog, throughput and a conservative ETA for the event pipeline.
 
 The progress report is intentionally read-only and never fabricates a
-countdown. An ETA is returned only when the recent samples are fresh, span a
-wide enough window and show real progress; otherwise ``eta_reason`` explains
-why an estimate would be misleading (cold start, pause, throttling, stall).
+countdown. Counts are separated by processing scope:
+
+* ``archived`` is the full raw-event total;
+* only events admitted to processing (no closed import boundary, no
+  unresolved image hold) belong to the processing scope, so archived-only
+  history is never reported as a pending to-do;
+* routing completion is never reported as whole-pipeline completion, and an
+  ETA is suppressed immediately when the pipeline is paused or blocked.
+
+An ETA is returned only when the recent samples are fresh, span a wide enough
+window and show real progress; otherwise ``eta_reason`` explains why an
+estimate would be misleading (cold start, pause, throttling, stall).
 """
 from datetime import datetime, timedelta, timezone
 
@@ -36,37 +45,106 @@ def _table_exists(conn, name):
     ).fetchone() is not None
 
 
+def _admission_scope_clause(conn):
+    """Restrict raw events to the admitted processing scope.
+
+    Excludes events whose import boundary is still closed and events held
+    pending image transcription. Uses the ``raw_events r`` alias.
+    """
+    clause = ""
+    if _table_exists(conn, "pipeline_import_boundaries"):
+        clause += (
+            " AND NOT EXISTS (SELECT 1 FROM pipeline_import_boundaries b "
+            "WHERE b.upload_id=json_extract(r.metadata_json,"
+            "'$.import_upload_id') AND b.released=0)")
+    if _table_exists(conn, "pipeline_image_holds"):
+        clause += (
+            " AND NOT EXISTS (SELECT 1 FROM pipeline_image_holds h "
+            "WHERE h.raw_id=r.id AND h.event_hash=r.event_hash)")
+    return clause
+
+
 def counts(store):
-    """Return total raw events and the subset with a durable route."""
+    """Return archived totals separated from the processing backlog.
+
+    Archived-only history (closed import boundary) and unresolved image holds
+    are kept out of the processing scope, so they are never reported as a
+    pending to-do. Routing and settlement are counted separately.
+    """
+    empty = {
+        "archived": 0, "admitted": 0, "total": 0, "routed": 0,
+        "processed": 0, "completed": 0, "pending": 0,
+        "pending_unrouted": 0, "pending_unprocessed": 0,
+    }
     if not _table_exists(store.conn, "raw_events"):
-        return {"total": 0, "completed": 0, "pending": 0}
-    total = store.conn.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]
+        return empty
+    archived = store.conn.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]
+    scope = _admission_scope_clause(store.conn)
+    admitted = store.conn.execute(
+        "SELECT COUNT(*) FROM raw_events r WHERE 1=1" + scope
+    ).fetchone()[0]
+    # Routed = admitted raw events with a durable route.
+    routed = 0
     if _table_exists(store.conn, "pipeline_route_provenance"):
-        completed = store.conn.execute(
-            """SELECT COUNT(DISTINCT raw_id) FROM (
-                SELECT raw_id FROM pipeline_routes
-                UNION
-                SELECT raw_id FROM pipeline_route_provenance)"""
+        routed = store.conn.execute(
+            "SELECT COUNT(DISTINCT r.id) FROM raw_events r WHERE 1=1"
+            + scope + " AND (r.id IN (SELECT raw_id FROM pipeline_routes) "
+            "OR r.id IN (SELECT raw_id FROM pipeline_route_provenance))"
         ).fetchone()[0]
     elif _table_exists(store.conn, "pipeline_routes"):
-        completed = store.conn.execute(
-            "SELECT COUNT(DISTINCT raw_id) FROM pipeline_routes"
+        routed = store.conn.execute(
+            "SELECT COUNT(DISTINCT r.id) FROM raw_events r WHERE 1=1"
+            + scope + " AND r.id IN (SELECT raw_id FROM pipeline_routes)"
         ).fetchone()[0]
-    else:
-        completed = 0
-    completed = min(completed, total)
-    return {"total": total, "completed": completed, "pending": total - completed}
+    # Processed = admitted raw events recorded by Curator/Writer settlement
+    # (settled or skipped). Deferred events are intentionally absent.
+    processed = 0
+    if _table_exists(store.conn, "raw_processing"):
+        processed = store.conn.execute(
+            "SELECT COUNT(DISTINCT r.id) FROM raw_events r WHERE 1=1"
+            + scope + " AND r.id IN (SELECT raw_id FROM raw_processing)"
+        ).fetchone()[0]
+    routed = min(routed, admitted)
+    processed = min(processed, admitted)
+    return {
+        "archived": archived,
+        "admitted": admitted,
+        "total": admitted,
+        "routed": routed,
+        "processed": processed,
+        "pending_unrouted": admitted - routed,
+        "pending_unprocessed": admitted - processed,
+    }
+
+
+def _completed_for(current):
+    """Return (completed, pending) over the admitted scope, ignoring pauses.
+
+    While routing is incomplete, completion tracks routing; once everything is
+    routed, completion tracks downstream settlement so routing is never
+    mistaken for whole-pipeline completion.
+    """
+    admitted = current["admitted"]
+    if admitted == 0:
+        return 0, 0
+    if current["pending_unrouted"] > 0:
+        return current["routed"], current["pending_unrouted"]
+    if current["pending_unprocessed"] > 0:
+        return current["processed"], current["pending_unprocessed"]
+    return admitted, 0
 
 
 def stage_for(current, result_status):
-    if current["total"] == 0:
+    """Stage over the admitted scope, honoring pause/block status."""
+    if current["admitted"] == 0:
         return "empty"
-    if current["pending"] == 0:
-        return "done"
     if result_status in ("paused", "blocked"):
         return "blocked"
-    # Routing is the dominant, measurable phase for large imports.
-    return "routing"
+    if current["pending_unrouted"] > 0:
+        return "routing"
+    if current["pending_unprocessed"] > 0:
+        return "processing"
+    return "done"
 
 
 def record_sample(database, result_status=""):
@@ -75,6 +153,7 @@ def record_sample(database, result_status=""):
         create_samples_table(store.conn)
         current = counts(store)
         stage = stage_for(current, result_status)
+        completed, _ = _completed_for(current)
         store.conn.execute(
             """INSERT INTO pipeline_progress_samples
                 (sampled_at, stage, completed_count, total_count)
@@ -82,8 +161,8 @@ def record_sample(database, result_status=""):
             (
                 datetime.now(timezone.utc).isoformat(),
                 stage,
-                current["completed"],
-                current["total"],
+                completed,
+                current["admitted"],
             ),
         )
         store.conn.execute(
@@ -162,23 +241,37 @@ def progress_report(database, result_status=""):
     with Store(database, read_only=True) as store:
         current = counts(store)
         samples = _read_samples(store)
+    latest = samples[-1] if samples else None
     stage = stage_for(current, result_status)
+    # A freshly recorded blocked sample must be honored even if the caller did
+    # not pass the result status: suppress the ETA immediately rather than
+    # waiting for the sample to age out.
+    if stage in ("routing", "processing") and latest is not None:
+        if latest["stage"] == "blocked":
+            stage = "blocked"
+    completed, pending = _completed_for(current)
     if stage == "done":
         eta_seconds, reason, rate = 0, None, 0
     elif stage == "empty":
         eta_seconds, reason, rate = None, "insufficient_samples", 0
+    elif stage == "blocked":
+        eta_seconds, reason, rate = None, "paused_or_blocked", 0
     else:
-        eta_seconds, reason, rate = estimate(samples, current["pending"], now)
+        eta_seconds, reason, rate = estimate(samples, pending, now)
     percent = (
-        round(current["completed"] * 100.0 / current["total"], 2)
-        if current["total"]
+        round(completed * 100.0 / current["admitted"], 2)
+        if current["admitted"]
         else 0.0
     )
     return {
         "stage": stage,
-        "total": current["total"],
-        "completed": current["completed"],
-        "pending": current["pending"],
+        "archived": current["archived"],
+        "admitted": current["admitted"],
+        "total": current["admitted"],
+        "routed": current["routed"],
+        "processed": current["processed"],
+        "completed": completed,
+        "pending": pending,
         "percent": percent,
         "throughput_per_hour": round(rate * 3600.0, 1) if rate > 0 else None,
         "samples": len(samples),

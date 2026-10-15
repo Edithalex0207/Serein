@@ -161,6 +161,12 @@ def test_done_report_has_zero_eta(settings):
             "INSERT OR REPLACE INTO pipeline_routes (raw_id, route_json) VALUES (?, '{}')",
             [(i,) for i in ids],
         )
+        # Done requires downstream Curator/Writer settlement, not only routing.
+        store.conn.executemany(
+            "INSERT OR IGNORE INTO raw_processing (raw_id, operation_id, outcome) "
+            "VALUES (?, ?, 'settled')",
+            [(i, "b1") for i in ids],
+        )
     report = pp.progress_report(settings.database, "processed")
     assert report["stage"] == "done"
     assert report["pending"] == 0 and report["percent"] == 100.0
@@ -201,3 +207,113 @@ def test_progress_api_endpoint(settings):
     assert data["total"] == 100 and data["completed"] == 40
     assert data["eta_reliable"] is True
     assert data["eta_human"] == "6 分 0 秒"
+
+
+# --- Review fixes: archived-only scope, routing vs settlement, pause ETA ---
+
+
+def test_archived_only_history_is_not_pending(settings):
+    # 4 events archived but the import boundary is still closed: nothing has
+    # been admitted to processing, so there is no pending to-do.
+    add_raw(settings, 4)
+    with Store(settings.database) as store:
+        store.conn.execute(
+            "UPDATE raw_events SET metadata_json=? WHERE metadata_json='{}'",
+            ('{"import_upload_id":"up1"}',),
+        )
+        store.conn.execute(
+            "INSERT INTO pipeline_import_boundaries (upload_id, released) "
+            "VALUES (?,0)",
+            ("up1",),
+        )
+    report = pp.progress_report(settings.database)
+    assert report["archived"] == 4
+    assert report["admitted"] == 0
+    assert report["total"] == 0
+    assert report["pending"] == 0
+    assert report["stage"] == "empty"
+
+
+def test_image_held_events_kept_out_of_scope(settings):
+    add_raw(settings, 4)
+    with Store(settings.database) as store:
+        row = store.conn.execute(
+            "SELECT id, event_hash FROM raw_events LIMIT 1").fetchone()
+        store.conn.execute(
+            "INSERT OR IGNORE INTO pipeline_image_holds "
+            "(raw_id, sha256, event_hash) VALUES (?,?,?)",
+            (row["id"], "x1", row["event_hash"]),
+        )
+    report = pp.progress_report(settings.database)
+    assert report["archived"] == 4
+    assert report["admitted"] == 3
+    assert report["pending"] == 3
+
+
+def test_routed_not_done_without_settlement(settings):
+    # Daytime routing may be persisted before Curator/Writer settlement.
+    add_raw(settings, 4)
+    with Store(settings.database) as store:
+        ids = [r[0] for r in store.conn.execute("SELECT id FROM raw_events")]
+        store.conn.executemany(
+            "INSERT OR REPLACE INTO pipeline_routes (raw_id, route_json) "
+            "VALUES (?, '{}')",
+            [(i,) for i in ids],
+        )
+    report = pp.progress_report(settings.database, "processed")
+    assert report["stage"] == "processing"
+    assert report["routed"] == 4 and report["processed"] == 0
+    assert report["pending"] == 4
+    assert report["percent"] == 0.0
+    assert report["eta_reliable"] is False
+
+
+def test_eta_suppressed_immediately_when_paused(settings):
+    add_raw(settings, 6)
+    with Store(settings.database) as store:
+        ids = [r[0] for r in store.conn.execute(
+            "SELECT id FROM raw_events ORDER BY id LIMIT 2")]
+        store.conn.executemany(
+            "INSERT OR REPLACE INTO pipeline_routes (raw_id, route_json) "
+            "VALUES (?, '{}')",
+            [(i,) for i in ids],
+        )
+    # Fresh samples showing steady progress over 180 s.
+    seed_samples(settings, [(-180, 0), (-120, 1), (-60, 1), (0, 2)])
+    report = pp.progress_report(settings.database, "paused")
+    assert report["stage"] == "blocked"
+    assert report["eta_reliable"] is False
+    assert report["eta_reason"] == "paused_or_blocked"
+    assert report["eta_seconds"] is None
+
+
+def test_eta_suppressed_by_fresh_blocked_sample(settings):
+    # Newest sample is fresh but already records the blocked stage; the status
+    # argument is not passed. The ETA must still be suppressed immediately.
+    add_raw(settings, 6)
+    with Store(settings.database) as store:
+        ids = [r[0] for r in store.conn.execute(
+            "SELECT id FROM raw_events ORDER BY id LIMIT 2")]
+        store.conn.executemany(
+            "INSERT OR REPLACE INTO pipeline_routes (raw_id, route_json) "
+            "VALUES (?, '{}')",
+            [(i,) for i in ids],
+        )
+    now = datetime.now(timezone.utc)
+    with Store(settings.database) as store:
+        pp.create_samples_table(store.conn)
+        total = store.conn.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]
+        for offset, stage, completed in [
+                (-180, "routing", 0), (-120, "routing", 1),
+                (-60, "routing", 2), (0, "blocked", 2)]:
+            store.conn.execute(
+                """INSERT INTO pipeline_progress_samples
+                    (sampled_at, stage, completed_count, total_count)
+                    VALUES (?,?,?,?)""",
+                ((now + timedelta(seconds=offset)).isoformat(),
+                 stage, completed, total),
+            )
+    report = pp.progress_report(settings.database)
+    assert report["stage"] == "blocked"
+    assert report["eta_reliable"] is False
+    assert report["eta_reason"] == "paused_or_blocked"
