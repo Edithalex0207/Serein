@@ -36,7 +36,7 @@ def add_raw(value, number):
     raw_archive(value).ingest(events, source="test")
 
 
-def seed_samples(value, offset_completed, now=None):
+def seed_samples(value, offset_completed, now=None, stage="routing"):
     """Insert (offset_seconds, completed) pairs; offsets relative to now."""
     now = now or datetime.now(timezone.utc)
     with Store(value.database) as store:
@@ -49,7 +49,7 @@ def seed_samples(value, offset_completed, now=None):
                     VALUES (?,?,?,?)""",
                 (
                     (now + timedelta(seconds=offset)).isoformat(),
-                    "routing",
+                    stage,
                     completed,
                     total,
                 ),
@@ -283,6 +283,74 @@ def test_eta_suppressed_immediately_when_paused(settings):
     report = pp.progress_report(settings.database, "paused")
     assert report["stage"] == "blocked"
     assert report["eta_reliable"] is False
+    assert report["eta_reason"] == "paused_or_blocked"
+
+
+def test_real_task_pause_suppresses_api_eta_without_writing(settings):
+    from serein import work_tasks
+    add_raw(settings, 6)
+    seed_samples(settings, [(-180, 0), (-120, 1), (-60, 1), (0, 2)])
+    work_tasks.enqueue(settings.database, "pipeline")
+    work_tasks.pause(settings.database, "pipeline")
+    client = TestClient(create_app(settings, token="test", live=True),
+                        headers={"Authorization": "Bearer test"})
+    before = settings.database.read_bytes()
+    response = client.get("/api/pipeline/progress")
+    assert response.status_code == 200
+    assert settings.database.read_bytes() == before
+    assert response.json()["stage"] == "blocked"
+    assert response.json()["eta_seconds"] is None
+
+
+def test_processing_needs_its_own_samples(settings):
+    add_raw(settings, 10)
+    with Store(settings.database) as store:
+        ids = [r[0] for r in store.conn.execute("SELECT id FROM raw_events ORDER BY id")]
+        store.conn.executemany("INSERT INTO pipeline_routes VALUES (?, '{}')", [(i,) for i in ids])
+        store.conn.executemany("INSERT INTO raw_processing (raw_id, operation_id, outcome) VALUES (?, 'b1', 'settled')",
+                               [(i,) for i in ids[:2]])
+    now = datetime.now(timezone.utc)
+    seed_samples(settings, [(-300, 0), (-240, 4), (-180, 8)], now=now)
+    seed_samples(settings, [(-120, 0)], now=now, stage="processing")
+    report = pp.progress_report(settings.database)
+    assert report["stage"] == "processing"
+    assert report["eta_reason"] == "insufficient_samples"
+    assert report["samples"] == 1
+    seed_samples(settings, [(-60, 1), (0, 2)], now=now, stage="processing")
+    report = pp.progress_report(settings.database)
+    assert report["throughput_per_hour"] == 60.0
+    assert report["eta_seconds"] == 480.0
+
+
+def test_returning_stage_does_not_reuse_older_segment(settings):
+    add_raw(settings, 10)
+    now = datetime.now(timezone.utc)
+    seed_samples(settings, [(-240, 0), (-180, 2), (-120, 4)], now=now)
+    seed_samples(settings, [(-60, 1)], now=now, stage="processing")
+    seed_samples(settings, [(0, 5)], now=now)
+    report = pp.progress_report(settings.database)
+    assert report["eta_reason"] == "insufficient_samples"
+    assert report["samples"] == 1
+
+
+@pytest.mark.parametrize("state,fields", [
+    ("running", {"stop_requested": True, "lease_until": 4102444800}),
+    ("running", {"lease_until": 1}),
+    ("needs_repair", {}),
+    ("awaiting_agent", {}),
+    ("failed", {}),
+])
+def test_waiting_or_interrupted_work_has_no_eta_and_get_is_read_only(settings, state, fields):
+    import json
+    add_raw(settings, 6)
+    seed_samples(settings, [(-180, 0), (-120, 1), (-60, 1), (0, 2)])
+    task = {"id": "pipeline", "status": state, **fields}
+    with Store(settings.database) as store:
+        store.conn.execute("INSERT INTO background_state VALUES ('work:pipeline', ?)", (json.dumps(task),))
+    before = settings.database.read_bytes()
+    report = pp.progress_report(settings.database)
+    assert settings.database.read_bytes() == before
+    assert report["stage"] == "blocked"
     assert report["eta_reason"] == "paused_or_blocked"
     assert report["eta_seconds"] is None
 

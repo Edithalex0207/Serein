@@ -14,7 +14,8 @@ An ETA is returned only when the recent samples are fresh, span a wide enough
 window and show real progress; otherwise ``eta_reason`` explains why an
 estimate would be misleading (cold start, pause, throttling, stall).
 """
-from datetime import datetime, timedelta, timezone
+import json
+from datetime import datetime, timezone
 
 from ..core.store import Store
 
@@ -189,6 +190,31 @@ def _read_samples(store):
     return [dict(row) for row in reversed(rows)]
 
 
+def _task_blocked(store, now):
+    # Read the durable task without status(), which recovers leases by writing.
+    if not _table_exists(store.conn, "background_state"):
+        return False
+    row = store.conn.execute(
+        "SELECT value_json FROM background_state WHERE name='work:pipeline'"
+    ).fetchone()
+    if row is None:
+        return False
+    task = json.loads(row[0])
+    status = task.get("status")
+    return (status in ("paused", "blocked", "failed", "interrupted",
+                       "needs_repair", "awaiting_agent", "retry_wait")
+            or (status == "running" and (task.get("stop_requested")
+                or task.get("lease_until", 0) < now.timestamp())))
+
+
+def _stage_samples(samples, stage):
+    # A switch back to an earlier stage starts a new measurement segment too.
+    start = len(samples)
+    while start and samples[start - 1]["stage"] == stage:
+        start -= 1
+    return samples[start:]
+
+
 def estimate(samples, pending, now):
     """Measure throughput over the sliding window; return a conservative ETA."""
     if not samples:
@@ -215,7 +241,7 @@ def estimate(samples, pending, now):
     completed_delta = latest["completed_count"] - start["completed_count"]
     if completed_delta <= 0 or span <= 0:
         return None, "stalled", 0
-    rate = completed_delta / span  # routed messages per second
+    rate = completed_delta / span  # completed messages per second in this stage
     if pending <= 0:
         return 0, None, rate
     return pending / rate, None, rate
@@ -241,8 +267,11 @@ def progress_report(database, result_status=""):
     with Store(database, read_only=True) as store:
         current = counts(store)
         samples = _read_samples(store)
+        task_blocked = _task_blocked(store, now)
     latest = samples[-1] if samples else None
     stage = stage_for(current, result_status)
+    if stage in ("routing", "processing") and task_blocked:
+        stage = "blocked"
     # A freshly recorded blocked sample must be honored even if the caller did
     # not pass the result status: suppress the ETA immediately rather than
     # waiting for the sample to age out.
@@ -250,6 +279,7 @@ def progress_report(database, result_status=""):
         if latest["stage"] == "blocked":
             stage = "blocked"
     completed, pending = _completed_for(current)
+    samples = _stage_samples(samples, stage)
     if stage == "done":
         eta_seconds, reason, rate = 0, None, 0
     elif stage == "empty":
