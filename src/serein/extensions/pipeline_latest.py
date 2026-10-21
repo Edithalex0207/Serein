@@ -200,9 +200,12 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
                        '给出 event_index、left_track_id、right_track_id、bridge_unit_root、reason，'
                        '以及两侧与桥接原文的逐字 evidence。boundaries 同时覆盖整个 events 数组相邻项和同一 Track 相邻项；'
                        '同线两条之间夹着别线 Event 也不能漏，重复配对只写一次。每对仍须双方各有逐字证据。'
-                       'Router 声明的 bridge 不自动归属两侧：若一侧 Event 拥有整枚 bridge，另一侧 Event 未拥有，'
+                       'Router 声明的 bridge 不自动归属两侧：只有两侧 Track 都有拟议 Event，且一侧 Event 拥有整枚 bridge、另一侧未拥有时，'
                        '须显式共享完整 unit，或在 decision_review.bridge_exclusions 给出 unit_root_message_id、'
-                       'excluded_track_id、reason 和该 unit 内的逐字 evidence。仅共享对象或背景可排除；'
+                       'excluded_track_id、reason 和该 unit 内的逐字 evidence，每个组合只填一次。'
+                       '双侧都拥有、双侧均未拥有或任一侧没有 Event 时，不填该组合；没有组合时返回 [] 或省略 bridge_exclusions。'
+                       '某侧没有 Event 时，其未入选 stable units 按原规则放入 skip/defer，由 dispositions 说明。'
+                       '删除多填的排除项，不为使其成立而新增 Event 或改变 ownership。仅共享对象或背景可排除；'
                        '实际回应、拒绝、纠正或收尾不可排除。\n'
                        if component.get('continuity_pairs') else
                        '你看到的是单一 primary Track 的有界 corridor。declared bridge 只共享当前直接 unit。\n')
@@ -228,7 +231,7 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
             '只选择 scope=stable 的完整 unit。每个 stable unit 必须恰好进入 Event、skip 或 defer；只有 Router 声明的 bridge 可共享。'
             'parked/context_only 只可阅读。extend/rewrite/merge 只填写 base_event_ids，host 保留原文并集。'
             'action 与 base_event_ids 数量必须匹配：create 为 0，extend/rewrite 恰好为 1，merge 至少为 2；base 只能从输入的 base_events 选择。'
-            'extend 只接续输入 base_events 中某一条已保存 Event，base_event_ids 必须恰好填写该 Event 的 event_id；同一 Track 的后续消息不等于 extend。base_events 为空时，拟议 Event 只能用 create，不能用 extend 加空 base。当前 events 数组内刚提出的 create 也不能作为 base；若后续 unit 仍属同一段活动，合入同一个 Event 的 owned_unit_roots，独立活动则分别 create。'
+            'extend 只接续输入 base_events 中某一条已保存 Event，base_event_ids 必须恰好填写该 Event 的 event_id；确认新原文接续该候选时，直接提出 extend，不另加交接标签或等待另一轮归线。同一 Track 的后续消息不等于 extend。目标不在本轮 base_events 时暂不交接，不猜 event_id，也不为查找候选发起 context_request；仍按现有入选、边界与暂缓规则处理本轮原文，不能仅因缺少旧 Event 就 skip 实质回应。base_events 为空时，拟议 Event 只能用 create，不能用 extend 加空 base。当前 events 数组内刚提出的 create 也不能作为 base；若后续 unit 仍属同一段活动，合入同一个 Event 的 owned_unit_roots，独立活动则分别 create。'
             '接续已保存 Event 时 Writer 仅写新增段落；只有必须整篇重新组织时才显式用 rewrite（一条 base），合并多条已保存 base 用 merge。'
             'base_events 给出 body_chars 和 append_remaining_chars（已扣除段落间两个换行）；容量为 0 或不足以表达新增内容时，为新增来源 create 后续 Event，沿用同一 primary_track_id，旧来源与旧正文只作背景；不要因为容量限制 rewrite 或 merge 旧 Event。受保护前版仍遵守原有续接开关和保护条件。'
             'parked 直接纠正紧邻 stable 结果时 defer；无关 parked 不影响已落定材料。'

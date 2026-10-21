@@ -21,7 +21,7 @@ Track 的 task_status 仅供了解任务进度；不代替原文、结束证据�
 - 先判断参与者实际展开了什么活动，再判断每枚 unit 是否参与它的起因、推进或落点。提及相同对象、沿用相同称呼、时间相邻或具有共同背景，都不足以建立这种关系；不能把另一事项的进度当作本次活动的起因或结果。
 - event_policy=rolling_engineering 按同一项具体建设归并：服务同一目标的调查、实现、修复和验证保持一条；局部发现或新 bug 本身不是边界。但 Track 名称、同一产品或宽泛 throughline 不是“一项建设”。材料转入具有独立请求、功能目标或产物的另一项建设，或者原建设明确结束后启动新建设，应按原文拆分并提供双侧边界证据。不得为满足条数机械合并；default Track 仍按实际活动判断。
 - 持续接续的玩笑、关系互动或共同意象可以形成完整经历；其中换一个局部提问、比喻或称呼，不自动构成新活动。实际事项完成也不自动结束围绕它的交流：后段若直接接着前段的具体措辞、比喻、评价或结果展开，且没有发起另一项活动，通常随前段保留，不因语气变化或转为调笑就拆分。
-- 核对边界两边的每一部分。接受、拒绝、暂缓、纠正或改变前段结果的回复须随前段保留；同条消息后半段的新问题尚未展开，也不能成为整枚 skip 的理由。后段若另行提出邀请、请求或行动，并得到实际接续，应分成新 Event；前事引出后事或沿用措辞不足以合并完整的新活动。仅独立问候或回想，未经接续，不重新打开旧 Event。
+- 核对边界两边的每一部分。接受、拒绝、暂缓、纠正或改变前段结果的回复，只有在实际接续前段具体内容时才随前段保留；同条消息后半段的新问题尚未展开，也不能成为整枚 skip 的理由。后段若另行提出邀请、请求或行动，并得到实际接续，应分成新 Event；前事引出后事或沿用措辞不足以合并完整的新活动。仅独立问候或回想，未经接续，不重新打开旧 Event。
 - 对这种连续接续另拆 Event 时，decision_review.boundaries.reason 必须说明后段实际新发起了什么活动、双方如何接续，不能只贴“技术／情感”等不同类别标签。
 - 普通完整交流可以在 {ai_name} 对用户的正常回复结束；不得把 {ai_name} 的回复从发起它的用户消息中孤立出去。
 - proactive/free-activity 必须等到用户首条回应后才能整体判断；没有用户回应的孤立主动消息不生成 Event。
@@ -29,14 +29,20 @@ Track 的 task_status 仅供了解任务进度；不代替原文、结束证据�
 
 ## Ownership and existing Events
 
+- 回复中附带的提醒或建议，随当前主要活动保留，不因提到旧事就归入旧 Event 或续写它。若它实际回答了旧事的具体问题，或补充、修正了旧事的经过与结果，再按接续判断；继续展开的交流也可以构成接续，不要求行动成果。“附带”按它在本条回复中的作用判断，不按位置、长度或固定措辞判断。同条消息实际接续两项活动时，仍可共享完整 declared bridge unit。Router 已声明 bridge 不替代这一判断；未参与的一侧按现有 bridge_exclusions 说明。
+- 同一长期方向不是一段无限延长的经历。后续有独立请求或具体目标并实际展开时分别判断 Event；仍在补完同一个具体目标的跨日步骤可以接续。
+- 判断示例：正在讨论陶杯的釉色，助手说：“这个蓝色让我想起上周看的展览。”这句话是在描述釉色，展览只是被借来作比较，不因此给展览 Event 增加来源或续写。若后面真正围绕展览中的作品展开问答，再按实际承接判断那部分属于什么活动。本例只解释提及与实际参与的区别，不以其中的对象或措辞作为分类条件。
+
 - dialogue unit 是模型选择的 ownership 原子；不得只取一枚 unit 中的部分消息。host 会把 unit 确定性展开成全部 source IDs。
 - Track primary routing 只负责唯一 accounting。Event 可以重叠，但只能共同选择 Router 已声明的 bridge unit；普通 unit 不得重复归属。
 - 用户或 {ai_name} 的一枚回复可以落定前线并开启后线；前后 Event 可以共同选择完整的 declared bridge unit，但两条 Event 都还应有自己的实际问题、回答、行动或结果，不能只靠 bridge 成立。
 - 若同一枚 unit 明确回答、拒绝、纠正或落定前一活动，又发起得到接续的新活动，前后两条 Event 都应显式选择完整 bridge；host 不自动增加第二个 owner。
-- Router 的 bridge 是共同审阅线索，不强制两侧 Event 都绑定。若某侧只共享对象或背景、没有参与该侧活动，可在 decision_review.bridge_exclusions 写明 unit_root_message_id、excluded_track_id、具体理由及 bridge unit 内逐字 evidence；没有排除项时可省略。不能用排除项丢掉实际回应或收尾。
+- Router 的 bridge 是共同审阅线索，不强制每侧都生成 Event 或绑定原文。先判断两侧各自是否形成 Event，再核对 bridge 是否实际回应、拒绝、纠正或落定它；实际参与的一侧显式选择完整 unit，不能漏掉必要收尾。
+- decision_review.bridge_exclusions 只用于两侧 Track 都有拟议 Event，且一侧拥有完整 bridge unit、另一侧未拥有的情况。若未拥有侧只共享对象或背景、没有参与该侧活动，填写 unit_root_message_id、excluded_track_id、具体理由及 bridge unit 内逐字 evidence；每个 unit 与未拥有侧的组合只填一次。双侧都拥有、双侧均未拥有或任一侧没有 Event 时，不填该组合；没有需要说明的组合时返回 [] 或省略 bridge_exclusions。
+- 某侧不形成 Event 时，按原有规则把该侧未入选的 stable units 放入 skip/defer，并在 dispositions 说明。多填的排除项应删除，不为使排除项成立而新建 Event 或改变 ownership；实际回应或收尾仍按原文保留。
 - 启用 materials 审阅时，双方共同拥有的 declared bridge 可以分别提供落定前项、开展后项的不同逐字片段；每段引文必须仅在一侧的 main/mixed 中实际保留。双侧都保留的同一引文不能证明边界，不改完整 bridge ownership 来制造独占来源，不跨省略片段拼接引文。未启用 materials 时仍使用各侧独占的 owned 原文。
 - create 不选 base；extend 和 rewrite 必须选一个 base；merge 必须选至少两个 base。接续输入中某一条已保存 Event 使用 extend，只追加新段落；确有必要整篇重新组织时才显式选 rewrite 并在 decision_review.events.reason 说明原因。只选择 base_event_ids 与本轮 owned_unit_roots；host 自动计算“所有所选 base 的旧 sources + 本轮完整 units”的 exact union。
-- extend 只接续输入 base_events 中某一条已保存 Event，base_event_ids 必须恰好填写该 Event 的 event_id；同一 Track 的后续消息不等于 extend。base_events 为空时，拟议 Event 只能用 create，不能用 extend 加空 base。当前 events 数组内刚提出的 create 也不能作为 base；若后续 unit 仍属同一段活动，合入同一个 Event 的 owned_unit_roots，独立活动则分别 create。
+- extend 只接续输入 base_events 中某一条已保存 Event，base_event_ids 必须恰好填写该 Event 的 event_id；确认新原文接续该候选时，直接提出 extend，不另加交接标签或等待另一轮归线。同一 Track 的后续消息不等于 extend。目标不在本轮 base_events 时暂不交接，不猜 event_id，也不为查找候选发起 context_request；仍按现有入选、边界与暂缓规则处理本轮原文，不能仅因缺少旧 Event 就 skip 实质回应。base_events 为空时，拟议 Event 只能用 create，不能用 extend 加空 base。当前 events 数组内刚提出的 create 也不能作为 base；若后续 unit 仍属同一段活动，合入同一个 Event 的 owned_unit_roots，独立活动则分别 create。
 - base_events 的 append_remaining_chars 已扣除段落间换行。容量耗尽或不足以表达新增内容时，为新增来源 create 后续 Event，沿用同一 primary_track_id；旧 Event 只作背景，不因容量而 rewrite，也不把满额前版重新选入 merge。后续再有新材料时，可继续 extend 尚有容量的后续 Event。受保护续接仍遵守原有开关与保护条件。
 - 在 rolling_engineering Track 中，必须逐条阅读 active leaf 绑定的原文，而不能用 leaf 数量代替相关性判断。base 与新原文都服务同一 Track throughline 才是相关材料；选择全部相关 leaves：一条用 extend，多条用 merge。关系互动、作品讨论或其他误归线 leaf 保持未选择；即使它是唯一 active leaf，也允许为真正的新工程经历 create。
 - protected、manual、forked、blocked、scene_ref 或 narrative_ref 的旧正文不能被自动重写。若新原文确实接续，仍按实际关系提出带 base_event_ids 和 owned_unit_roots 的 Event；host 只在明确启用且来源版本唯一、可核验时将新段落追加成新版本，其他情况暂缓。不得用 skip 绕过保护，也不要因为保护而把独立的新活动强行写成接续。
