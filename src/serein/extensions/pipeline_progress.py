@@ -5,8 +5,8 @@ countdown. Counts are separated by processing scope:
 
 * ``archived`` is the full raw-event total;
 * only events admitted to processing (no closed import boundary, no
-  unresolved image hold) belong to the processing scope, so archived-only
-  history is never reported as a pending to-do;
+  unresolved image hold, no archive-only processing outcome) belong to the
+  processing scope, so archived-only history is never reported as a pending to-do;
 * routing completion is never reported as whole-pipeline completion, and an
   ETA is suppressed immediately when the pipeline is paused or blocked.
 
@@ -49,7 +49,7 @@ def _table_exists(conn, name):
 def _admission_scope_clause(conn):
     """Restrict raw events to the admitted processing scope.
 
-    Excludes events whose import boundary is still closed and events held
+    Excludes archive-only outcomes, closed import boundaries and events held
     pending image transcription. Uses the ``raw_events r`` alias.
     """
     clause = ""
@@ -62,15 +62,20 @@ def _admission_scope_clause(conn):
         clause += (
             " AND NOT EXISTS (SELECT 1 FROM pipeline_image_holds h "
             "WHERE h.raw_id=r.id AND h.event_hash=r.event_hash)")
+    if _table_exists(conn, "raw_processing"):
+        clause += (
+            " AND NOT EXISTS (SELECT 1 FROM raw_processing p "
+            "WHERE p.raw_id=r.id AND p.outcome IN ('auto_boundary','archived_only'))")
     return clause
 
 
 def counts(store):
     """Return archived totals separated from the processing backlog.
 
-    Archived-only history (closed import boundary) and unresolved image holds
-    are kept out of the processing scope, so they are never reported as a
-    pending to-do. Routing and settlement are counted separately.
+    Archived-only history (closed import boundary or archive-only processing
+    outcome) and unresolved image holds are kept out of the processing scope,
+    so they are never reported as a pending to-do. Routing and settlement are
+    counted separately.
     """
     empty = {
         "archived": 0, "admitted": 0, "total": 0, "routed": 0,

@@ -234,6 +234,58 @@ def test_archived_only_history_is_not_pending(settings):
     assert report["stage"] == "empty"
 
 
+def test_auto_boundary_excluded_until_explicitly_restored(settings):
+    from serein.deployment import save_settings
+
+    save_settings(settings.database, {"pipeline": {"auto_enabled": False}})
+    add_raw(settings, 4)
+    save_settings(settings.database, {"pipeline": {"auto_enabled": True}})
+    assert p.new_batch(settings.database, True) is None
+    client = TestClient(create_app(settings, token="test", live=True),
+                        headers={"Authorization": "Bearer test"})
+    before = settings.database.read_bytes()
+    response = client.get("/api/pipeline/progress")
+    assert response.status_code == 200
+    assert settings.database.read_bytes() == before
+    report = response.json()
+    assert report["archived"] == 4
+    assert report["admitted"] == report["processed"] == report["pending"] == 0
+    assert report["stage"] == "empty"
+
+    # New originals still enter the backlog; restoring the boundary admits
+    # the old originals again without changing the archive total.
+    add_raw(settings, 6)
+    report = pp.progress_report(settings.database)
+    assert report["archived"] == 6
+    assert report["admitted"] == report["pending"] == 2
+    assert report["stage"] == "routing"
+    assert p.restore_auto_boundary(settings.database, "RESTORE_AUTO_BOUNDARY")["restored_originals"] == 4
+    report = pp.progress_report(settings.database)
+    assert report["archived"] == report["admitted"] == report["pending"] == 6
+
+
+def test_legacy_archived_only_rows_do_not_obscure_settled_or_skipped_work(settings):
+    add_raw(settings, 4)
+    with Store(settings.database) as store:
+        ids = [r[0] for r in store.conn.execute("SELECT id FROM raw_events ORDER BY id")]
+        store.conn.executemany(
+            "INSERT INTO raw_processing VALUES (?, 'legacy-originals:synthetic', 'archived_only')",
+            [(i,) for i in ids[:2]],
+        )
+        store.conn.executemany(
+            "INSERT INTO raw_processing VALUES (?, 'b1', ?)",
+            [(ids[2], "settled"), (ids[3], "skipped")],
+        )
+        store.conn.executemany("INSERT INTO pipeline_routes VALUES (?, '{}')", [(i,) for i in ids[2:]])
+    report = pp.progress_report(settings.database)
+    assert report["archived"] == 4
+    assert report["admitted"] == report["routed"] == report["processed"] == 2
+    assert report["pending"] == 0
+    assert report["stage"] == "done"
+    assert report["percent"] == 100.0
+    assert report["eta_seconds"] == 0
+
+
 def test_image_held_events_kept_out_of_scope(settings):
     add_raw(settings, 4)
     with Store(settings.database) as store:
