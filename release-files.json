@@ -601,5 +601,10 @@
   "web/tests/index-throughput.dom.mjs",
   "src/serein/api/pipeline_progress.py",
   "src/serein/extensions/pipeline_progress.py",
-  "tests/test_pipeline_progress.py"
+  "tests/test_pipeline_progress.py",
+  "web/src/components/DarkroomTitle.jsx",
+  "web/src/components/WhisperTitle.jsx",
+  "web/src/components/darkroomGlyphs.js",
+  "web/src/components/darkroomInk.js",
+  "web/tests/darkroom-ink.test.mjs"
 ]
