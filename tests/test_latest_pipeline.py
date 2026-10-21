@@ -179,6 +179,59 @@ def test_router_api_repair_receives_missing_field_and_preserves_sources(settings
         assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0] == 0
 
 
+def test_curator_api_repair_removes_unneeded_bridge_exclusion_without_adding_an_event(settings, monkeypatch):
+    ingest(settings)
+    save_settings(settings.database, {
+        'models': [{'id': 'local', 'model': 'synthetic', 'base_url': 'http://127.0.0.1:9/v1'}],
+        'assignments': {role: 'local' for role in p.ROLES},
+        'pipeline': {'execution_mode': 'api', 'joint_review_enabled': True}})
+    curator_calls = []
+    proposals = []
+    async def complete(model, payload):
+        with Store(settings.database, read_only=True) as store:
+            request = json.loads(store.conn.execute(
+                'SELECT request_json FROM pipeline_jobs WHERE output_json IS NULL ORDER BY rowid DESC LIMIT 1'
+            ).fetchone()[0])
+        output = output_for(request['role'], request)
+        if request['role'] == 'track_router':
+            output['message_assignments'][0].update(context_track_refs=['new:2'], routing_role='bridge')
+            output['track_updates'].append({'track_ref': 'new:2', 'subject': 'Earlier reading list',
+                'throughline': 'Earlier background only', 'event_policy': 'default', 'status': 'parked'})
+        elif request['role'] == 'event_curator':
+            curator_calls.append(payload)
+            unit = next(unit for unit in request['component']['memberships'] if unit['routing_role'] == 'bridge')
+            output['events'][0]['primary_track_id'] = unit['track_id']
+            proposals.append(copy.deepcopy(output['events']))
+            other = next(edge['track_id'] for edge in request['component']['context_edges']
+                         if edge['unit_root_message_id'] == unit['unit_root_message_id'])
+            assert all(event['primary_track_id'] != other for event in output['events'])
+            if len(curator_calls) == 1:
+                source = next(m for m in request['component']['messages'] if m['id'] == unit['unit_root_message_id'])
+                output['decision_review']['bridge_exclusions'] = [{
+                    'unit_root_message_id': unit['unit_root_message_id'], 'excluded_track_id': other,
+                    'reason': 'Only background',
+                    'evidence': [{'source_message_id': source['id'], 'quote': source['content']}]}]
+            else:
+                correction = payload['messages'][1]['content']
+                assert 'No missing side' in correction and 'bridge_exclusions: []' in correction
+                assert 'Do not create an Event or change ownership' in correction
+                output['decision_review']['bridge_exclusions'] = []
+        return {'choices': [{'message': {'content': json.dumps(output)}}]}
+    monkeypatch.setattr('serein.model_runtime.complete', complete)
+    result = asyncio.run(p.advance(settings.database, include_recent=True))
+    assert result['events'] == 1 and len(curator_calls) == 2
+    assert proposals[0] == proposals[1]
+    with Store(settings.database, read_only=True) as store:
+        saved = json.loads(store.conn.execute(
+            "SELECT output_json FROM pipeline_jobs WHERE role LIKE 'event_curator:%'").fetchone()[0])
+        assert saved['decision_review']['bridge_exclusions'] == []
+        assert len(saved['events']) == 1
+        assert [row[0] for row in store.conn.execute('SELECT id FROM raw_events ORDER BY id')] == [1, 2]
+        assert [tuple(row) for row in store.conn.execute(
+            'SELECT raw_id,outcome FROM raw_processing ORDER BY raw_id')] == [(1, 'settled'), (2, 'settled')]
+        assert store.conn.execute("SELECT count(*) FROM pipeline_attempts WHERE COALESCE(error,'')<>''").fetchone()[0] == 1
+
+
 @pytest.mark.parametrize('action,base_count,expected', [
     ('create', 1, '0'), ('extend', 0, '1'), ('rewrite', 0, '1'),
     ('merge', 0, 'at least 2'), ('merge', 1, 'at least 2'),

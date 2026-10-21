@@ -200,9 +200,12 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
                        '给出 event_index、left_track_id、right_track_id、bridge_unit_root、reason，'
                        '以及两侧与桥接原文的逐字 evidence。boundaries 同时覆盖整个 events 数组相邻项和同一 Track 相邻项；'
                        '同线两条之间夹着别线 Event 也不能漏，重复配对只写一次。每对仍须双方各有逐字证据。'
-                       'Router 声明的 bridge 不自动归属两侧：若一侧 Event 拥有整枚 bridge，另一侧 Event 未拥有，'
+                       'Router 声明的 bridge 不自动归属两侧：只有两侧 Track 都有拟议 Event，且一侧 Event 拥有整枚 bridge、另一侧未拥有时，'
                        '须显式共享完整 unit，或在 decision_review.bridge_exclusions 给出 unit_root_message_id、'
-                       'excluded_track_id、reason 和该 unit 内的逐字 evidence。仅共享对象或背景可排除；'
+                       'excluded_track_id、reason 和该 unit 内的逐字 evidence，每个组合只填一次。'
+                       '双侧都拥有、双侧均未拥有或任一侧没有 Event 时，不填该组合；没有组合时返回 [] 或省略 bridge_exclusions。'
+                       '某侧没有 Event 时，其未入选 stable units 按原规则放入 skip/defer，由 dispositions 说明。'
+                       '删除多填的排除项，不为使其成立而新增 Event 或改变 ownership。仅共享对象或背景可排除；'
                        '实际回应、拒绝、纠正或收尾不可排除。\n'
                        if component.get('continuity_pairs') else
                        '你看到的是单一 primary Track 的有界 corridor。declared bridge 只共享当前直接 unit。\n')

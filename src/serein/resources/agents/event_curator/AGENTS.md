@@ -37,7 +37,9 @@ Track 的 task_status 仅供了解任务进度；不代替原文、结束证据�
 - Track primary routing 只负责唯一 accounting。Event 可以重叠，但只能共同选择 Router 已声明的 bridge unit；普通 unit 不得重复归属。
 - 用户或 {ai_name} 的一枚回复可以落定前线并开启后线；前后 Event 可以共同选择完整的 declared bridge unit，但两条 Event 都还应有自己的实际问题、回答、行动或结果，不能只靠 bridge 成立。
 - 若同一枚 unit 明确回答、拒绝、纠正或落定前一活动，又发起得到接续的新活动，前后两条 Event 都应显式选择完整 bridge；host 不自动增加第二个 owner。
-- Router 的 bridge 是共同审阅线索，不强制两侧 Event 都绑定。若某侧只共享对象或背景、没有参与该侧活动，可在 decision_review.bridge_exclusions 写明 unit_root_message_id、excluded_track_id、具体理由及 bridge unit 内逐字 evidence；没有排除项时可省略。不能用排除项丢掉实际回应或收尾。
+- Router 的 bridge 是共同审阅线索，不强制每侧都生成 Event 或绑定原文。先判断两侧各自是否形成 Event，再核对 bridge 是否实际回应、拒绝、纠正或落定它；实际参与的一侧显式选择完整 unit，不能漏掉必要收尾。
+- decision_review.bridge_exclusions 只用于两侧 Track 都有拟议 Event，且一侧拥有完整 bridge unit、另一侧未拥有的情况。若未拥有侧只共享对象或背景、没有参与该侧活动，填写 unit_root_message_id、excluded_track_id、具体理由及 bridge unit 内逐字 evidence；每个 unit 与未拥有侧的组合只填一次。双侧都拥有、双侧均未拥有或任一侧没有 Event 时，不填该组合；没有需要说明的组合时返回 [] 或省略 bridge_exclusions。
+- 某侧不形成 Event 时，按原有规则把该侧未入选的 stable units 放入 skip/defer，并在 dispositions 说明。多填的排除项应删除，不为使排除项成立而新建 Event 或改变 ownership；实际回应或收尾仍按原文保留。
 - 启用 materials 审阅时，双方共同拥有的 declared bridge 可以分别提供落定前项、开展后项的不同逐字片段；每段引文必须仅在一侧的 main/mixed 中实际保留。双侧都保留的同一引文不能证明边界，不改完整 bridge ownership 来制造独占来源，不跨省略片段拼接引文。未启用 materials 时仍使用各侧独占的 owned 原文。
 - create 不选 base；extend 和 rewrite 必须选一个 base；merge 必须选至少两个 base。接续输入中某一条已保存 Event 使用 extend，只追加新段落；确有必要整篇重新组织时才显式选 rewrite 并在 decision_review.events.reason 说明原因。只选择 base_event_ids 与本轮 owned_unit_roots；host 自动计算“所有所选 base 的旧 sources + 本轮完整 units”的 exact union。
 - extend 只接续输入 base_events 中某一条已保存 Event，base_event_ids 必须恰好填写该 Event 的 event_id；确认新原文接续该候选时，直接提出 extend，不另加交接标签或等待另一轮归线。同一 Track 的后续消息不等于 extend。目标不在本轮 base_events 时暂不交接，不猜 event_id，也不为查找候选发起 context_request；仍按现有入选、边界与暂缓规则处理本轮原文，不能仅因缺少旧 Event 就 skip 实质回应。base_events 为空时，拟议 Event 只能用 create，不能用 extend 加空 base。当前 events 数组内刚提出的 create 也不能作为 base；若后续 unit 仍属同一段活动，合入同一个 Event 的 owned_unit_roots，独立活动则分别 create。
