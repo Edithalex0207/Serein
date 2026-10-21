@@ -27,6 +27,8 @@ WINDOW_SECONDS = 1800.0
 STALE_SAMPLE_SECONDS = 300.0
 # Keep the sample table bounded.
 KEEP_RECENT_SAMPLES = 200
+# Keep enough time between retained measurements, plus the latest observation.
+SAMPLE_INTERVAL_SECONDS = MIN_WINDOW_SECONDS / (MIN_SAMPLES - 1)
 
 
 def create_samples_table(conn):
@@ -154,23 +156,30 @@ def stage_for(current, result_status):
 
 
 def record_sample(database, result_status=""):
-    """Append one progress sample after an advance; safe to call on every run."""
-    with Store(database) as store:
+    """Record current progress, retaining spaced samples within each stage."""
+    with Store(database) as store, store.transaction(immediate=True):
         create_samples_table(store.conn)
         current = counts(store)
         stage = stage_for(current, result_status)
         completed, _ = _completed_for(current)
-        store.conn.execute(
-            """INSERT INTO pipeline_progress_samples
-                (sampled_at, stage, completed_count, total_count)
-                VALUES (?,?,?,?)""",
-            (
-                datetime.now(timezone.utc).isoformat(),
-                stage,
-                completed,
-                current["admitted"],
-            ),
-        )
+        values = (datetime.now(timezone.utc).isoformat(), stage, completed, current["admitted"])
+        recent = store.conn.execute(
+            "SELECT id, sampled_at, stage FROM pipeline_progress_samples ORDER BY id DESC LIMIT 2"
+        ).fetchall()
+        # Move the newest observation forward until it is far enough from the
+        # preceding sample. Always insert stage changes so measurements cannot
+        # bridge a pause or reuse an earlier visit to the same stage.
+        if (len(recent) == 2 and recent[0]["stage"] == recent[1]["stage"] == stage
+                and (_parse(recent[0]["sampled_at"]) - _parse(recent[1]["sampled_at"])).total_seconds()
+                < SAMPLE_INTERVAL_SECONDS):
+            store.conn.execute(
+                "UPDATE pipeline_progress_samples SET sampled_at=?, stage=?, "
+                "completed_count=?, total_count=? WHERE id=?", (*values, recent[0]["id"]))
+        else:
+            store.conn.execute(
+                """INSERT INTO pipeline_progress_samples
+                    (sampled_at, stage, completed_count, total_count)
+                    VALUES (?,?,?,?)""", values)
         store.conn.execute(
             """DELETE FROM pipeline_progress_samples WHERE id NOT IN (
                 SELECT id FROM pipeline_progress_samples
@@ -190,7 +199,7 @@ def _read_samples(store):
         """SELECT sampled_at, stage, completed_count, total_count
             FROM pipeline_progress_samples
             ORDER BY id DESC LIMIT ?""",
-        (MIN_SAMPLES * 4,),
+        (KEEP_RECENT_SAMPLES,),
     ).fetchall()
     return [dict(row) for row in reversed(rows)]
 

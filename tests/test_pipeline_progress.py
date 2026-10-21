@@ -115,6 +115,78 @@ def test_eta_reliable_when_steady(settings):
     assert report["eta_seconds"] == 360.0
 
 
+def test_eta_reads_dense_existing_history(settings):
+    add_raw(settings, 100)
+    with Store(settings.database) as store:
+        store.conn.executemany("INSERT INTO pipeline_routes VALUES (?, '{}')",
+                               [(i,) for i in range(1, 61)])
+    seed_samples(settings, [(2 * step - 120, step) for step in range(61)])
+    before = settings.database.read_bytes()
+    report = pp.progress_report(settings.database)
+    assert settings.database.read_bytes() == before
+    assert report["eta_reliable"] is True
+    assert report["throughput_per_hour"] == 1800.0
+    assert report["eta_seconds"] == 80.0
+
+
+@pytest.mark.parametrize("spacing", [2, 0.25])
+def test_fast_sampling_preserves_time_span_and_latest_progress(settings, monkeypatch, spacing):
+    add_raw(settings, 100)
+    start = datetime.now(timezone.utc)
+    current = start
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return current
+
+    monkeypatch.setattr(pp, "datetime", Clock)
+    for step in range(int(120 / spacing) + 1):
+        elapsed = step * spacing
+        current = start + timedelta(seconds=elapsed)
+        if elapsed > 0 and elapsed % 2 == 0:
+            with Store(settings.database) as store:
+                store.conn.execute("INSERT INTO pipeline_routes VALUES (?, '{}')", (int(elapsed / 2),))
+        pp.record_sample(settings.database)
+    with Store(settings.database, read_only=True) as store:
+        rows = store.conn.execute("SELECT * FROM pipeline_progress_samples ORDER BY id").fetchall()
+    assert len(rows) <= pp.KEEP_RECENT_SAMPLES
+    assert (datetime.fromisoformat(rows[-1]["sampled_at"])
+            - datetime.fromisoformat(rows[0]["sampled_at"])).total_seconds() >= 60
+    assert datetime.fromisoformat(rows[-1]["sampled_at"]) == current
+    assert rows[-1]["completed_count"] == 60
+    report = pp.progress_report(settings.database)
+    assert report["eta_reliable"] is True
+    assert report["throughput_per_hour"] == 1800.0
+    assert report["eta_seconds"] == 80.0
+
+
+def test_fast_stage_changes_preserve_pause_and_restart_measurement(settings):
+    add_raw(settings, 100)
+    seed_samples(settings, [(-120, 0), (-60, 1), (0, 2)])
+    assert pp.progress_report(settings.database)["eta_reliable"] is True
+    pp.record_sample(settings.database, "blocked")
+    assert pp.progress_report(settings.database)["stage"] == "blocked"
+    pp.record_sample(settings.database)
+    pp.record_sample(settings.database)
+    report = pp.progress_report(settings.database)
+    assert report["stage"] == "routing"
+    assert report["eta_reason"] == "insufficient_samples"
+    with Store(settings.database, read_only=True) as store:
+        stages = [row[0] for row in store.conn.execute(
+            "SELECT stage FROM pipeline_progress_samples ORDER BY id")]
+    assert stages == ["routing"] * 3 + ["blocked", "routing", "routing"]
+
+
+def test_sample_retention_stays_bounded(settings):
+    add_raw(settings, 4)
+    seed_samples(settings, [(-60 * step, 0) for step in range(250, 0, -1)])
+    pp.record_sample(settings.database)
+    with Store(settings.database, read_only=True) as store:
+        count = store.conn.execute("SELECT COUNT(*) FROM pipeline_progress_samples").fetchone()[0]
+    assert count == pp.KEEP_RECENT_SAMPLES
+
+
 def test_eta_cold_start_with_few_samples(settings):
     add_raw(settings, 100)
     seed_samples(settings, [(0, 10), (-60, 20)])
