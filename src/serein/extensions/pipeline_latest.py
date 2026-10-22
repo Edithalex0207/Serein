@@ -159,9 +159,9 @@ def event_curator_model_input(component: dict[str, Any], snowflake_message_ids: 
             'continuity_pairs': list(component.get('continuity_pairs') or []),
             'unreviewed_continuity_pairs': list(component.get('unreviewed_continuity_pairs') or [])}
 
-def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], snowflake_message_ids: set[int] | None=None) -> str:
+def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], snowflake_message_ids: set[int] | None=None, *, include_role_rules: bool=True) -> str:
     model_input = event_curator_model_input(component, snowflake_message_ids)
-    agent_rules = materialize_agent_rules('event_curator')
+    agent_rules = materialize_agent_rules('event_curator') if include_role_rules else ''
     format_hint = {'events': [{'action': 'create', 'base_event_ids': [], 'primary_track_id': 'track_id', 'owned_unit_roots': [1]}],
                    'skip_unit_roots': [], 'defer_unit_roots': [],
                    'decision_review': {'events': [{'event_index': 0, 'reason': '这段原文实际展开的活动'}],

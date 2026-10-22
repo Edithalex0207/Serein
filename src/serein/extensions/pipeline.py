@@ -839,7 +839,7 @@ def request_for(database,batch,role,**fields):
             if not fields.get('transcription_only'):
                 unavailable={(i['source_message_id'],i['position'],i['sha256']) for i in component.get('unavailable_images',[])}
                 request['images']=[i for i in request['images'] if (i['source_message_id'],i['position'],i['sha256']) not in unavailable]
-            prompt=latest.build_event_track_curator_prompt(data['day'],component)
+            prompt=latest.build_event_track_curator_prompt(data['day'],component,include_role_rules=False)
             if component.get('missing_images'):
                 prompt+='\n以下附件原图缺失，host 已跳过附件。它们没有转录，也不代表图片为空。只整理已有文字与可用材料，不得猜补图片、声称看过图片或把图片内容写成事实：\n'+encode(component['missing_images'])
             if fields.get('pretranscribed'):
@@ -1198,6 +1198,13 @@ async def job(database,batch,request,key,runner):
     if request['role']=='event_writer' and not row['output_json'] and request.get('writer_previous_body_only')!=3:
         request=request_for(database,batch,'event_writer',**{key:request[key] for key in
             ('messages','event','component','context_read') if key in request})
+    if request['role']=='event_curator' and not row['output_json'] and request['rules']:
+        # Strip only the exact generated leading duplicate from unfinished jobs.
+        # Keep frozen rules, evidence, corrections and accepted receipts intact.
+        header,separator,body=request['prompt'].partition('\n\n')
+        if (header.startswith('[memory_phase: event_track_curator]\n')
+                and body.startswith(request['rules']+'\n\n')):
+            request['prompt']=header+separator+body[len(request['rules']):]
     request['execution']=current_execution
     incoming.clear();incoming.update(request)
     if not row['output_json']:
