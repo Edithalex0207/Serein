@@ -507,6 +507,7 @@
   "web/tests/create-uuid.test.mjs",
   "web/tests/memory-preparation.test.mjs",
   "web/tests/model-options.test.mjs",
+  "web/tests/model-settings-save.test.mjs",
   "web/tests/narrative-appearance.test.mjs",
   "web/tests/narrative-preview-jobs.test.mjs",
   "web/tests/persona-cards-preview.html",

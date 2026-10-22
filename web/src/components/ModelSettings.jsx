@@ -28,6 +28,7 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
   passageDraft,setPassageDraft}) {
   const [config,setConfig]=useState(null);
   const [indexDraft,setIndexDraft]=useState({});
+  const [pipelineDraft,setPipelineDraft]=useState({});
   const embeddingBatchSize=indexDraft.embedding_batch_size ?? config?.recall?.embedding_batch_size ?? 16;
   const embeddingConcurrency=indexDraft.embedding_concurrency ?? config?.recall?.embedding_concurrency ?? 1;
   const passagesEnabled=passageDraft.passages_enabled ?? config?.recall?.passages_enabled ?? false;
@@ -78,13 +79,17 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
     setConfig(current=>({...current,index_status:state}));
   }
   function option(key,value) {setConfig(current=>({...current,upstream:{...current.upstream,[key]:value}}));}
+  function pipelineOption(key,value) {
+    setPipelineDraft(current=>({...current,[key]:value}));
+    setConfig(current=>({...current,pipeline:{...current.pipeline,[key]:value}}));
+  }
   const availableModels=config?[...config.models,...upstreamModels(config.upstreams || [])]:[];
   function changeUpstreams(upstreams) {
     const ids=new Set([...config.models,...upstreamModels(upstreams)].map(model=>model.id));
     setConfig(current=>({...current,upstreams,assignments:Object.fromEntries(Object.entries(current.assignments).map(([key,value])=>[key,ids.has(value)?value:""]))}));
     setStatus("上游设置尚未保存。");
   }
-  async function save(event) {
+  async function save(event,catalogOnly=false) {
     event.preventDefault();setBusy(true);setStatus("");
     try {
       const models=config.models.map(({api_key_configured,clear_key,...model})=>{
@@ -94,6 +99,13 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
         return model;
       });
       const upstreams=upstreamsForSave(config.upstreams || [],upstreamForm.current);
+      if(catalogOnly){
+        const result=await instanceSettings({expected_version:config.settings_version,models,upstreams,assignments:config.assignments});
+        setConfig(current=>({...current,settings_version:result.settings_version,models:result.models,upstreams:result.upstreams,assignments:result.assignments,
+          memory_ready:result.memory_ready,index_status:result.index_status,upstream:{...current.upstream,memory_enabled:result.upstream.memory_enabled}}));
+        setStatus("上游与模型已保存。");
+        return;
+      }
       if(!validThreshold)throw new Error('召回阈值需填写 0 到 1 之间的数字。');
       if(!validCandidateThresholds)throw new Error('候选扩展门槛需填写 0 到 1 之间的数字。');
       if(directPoolLimit===''||!Number.isInteger(Number(directPoolLimit))||Number(directPoolLimit)<6||Number(directPoolLimit)>100)
@@ -102,12 +114,12 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
         throw new Error('长文起切字数需填写 1 到 100000 之间的整数。');
       for(const [value,max,label] of [[embeddingBatchSize,64,'向量每批条数'],[embeddingConcurrency,4,'向量请求并发数']])
         if(value===''||!Number.isInteger(Number(value))||Number(value)<1||Number(value)>max)throw new Error(`${label}需填写 1 到 ${max} 之间的整数。`);
-      const result=await instanceSettings({expected_version:config.settings_version,models,upstreams,assignments:config.assignments,pipeline:Object.fromEntries(Object.entries(config.pipeline).filter(([key])=>key!=='auto_enabled')),dream:config.dream,
+      const result=await instanceSettings({expected_version:config.settings_version,models,upstreams,assignments:config.assignments,...(Object.keys(pipelineDraft).length?{pipeline:pipelineDraft}:{}),dream:config.dream,
         recall:{...passageDraft,...Object.fromEntries(Object.entries(indexDraft).map(([key,value])=>[key,key==='index_catch_up'?value:Number(value)])),...('passage_min_chars' in passageDraft?{passage_min_chars:Number(passageMinChars)}:{}),
           ...(recallThreshold!==null?{direct_threshold:Number(threshold)}:{}),
           ...Object.fromEntries(Object.entries(candidateThresholdDraft).map(([key,value])=>[key,Number(value)]))},upstream:{
         writer_enabled:config.upstream.writer_enabled,memory_enabled:config.upstream.memory_enabled,operit_enabled:config.upstream.operit_enabled}});
-      setConfig(result);setIndexDraft({});setRecallThreshold(null);setCandidateThresholdDraft({});setPassageDraft({});setStatus("设置已保存。");
+      setConfig(result);setPipelineDraft({});setIndexDraft({});setRecallThreshold(null);setCandidateThresholdDraft({});setPassageDraft({});setStatus("设置已保存。");
     } catch(error){setStatus(error.message);}
     finally{setBusy(false);}
   }
@@ -134,10 +146,10 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
   return <>
     <div role="tabpanel" id="settings-content-models" aria-labelledby="settings-tab-models" aria-hidden={page!=="models"} inert={page!=="models"}>
       <section className="settings-group" aria-label="上游与模型">
-        {config&&<form ref={upstreamForm} onSubmit={save}>
+        {config&&<form ref={upstreamForm} onSubmit={event=>save(event,true)}>
       <div className="settings-group__heading"><h3>上游与模型</h3></div>
       <p className="model-connection-help">按上游管理模型，密钥只保存在服务端。</p>
-      <UpstreamSettings modelIds={availableModels.map(m=>m.id)} assignments={config.assignments} upstreams={config.upstreams || []} onChange={changeUpstreams} onImported={setConfig} busy={busy} setBusy={setBusy} setStatus={setStatus} />
+      <UpstreamSettings modelIds={availableModels.map(m=>m.id)} assignments={config.assignments} upstreams={config.upstreams || []} onChange={changeUpstreams} onImported={value=>{setConfig(value);setPipelineDraft({});}} busy={busy} setBusy={setBusy} setStatus={setStatus} />
           <button type="button" className="settings-link" onClick={onOpenAssignments}>选择各功能使用的模型</button>
           <div className="settings-actions"><button disabled={busy} type="submit">{busy?"处理中…":"保存上游与模型"}</button></div>
         </form>}
@@ -196,11 +208,11 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
       <label className="settings-toggle"><span><strong>整理 Operit 注入上下文</strong><small>识别系统前缀、附件和工作区，保留工具续轮的稳定上下文。</small></span><input type="checkbox" role="switch" checked={config.upstream.operit_enabled} onChange={event=>option("operit_enabled",event.target.checked)} /></label>
     <details className="settings-disclosure" ref={summaryConfig}><summary>自动摘要配置</summary><p>有时间按 20 分钟沉默切块；无时间按 20 轮完整问答切块。每块再受字符量限制，保留完整问答和原始编号。时间切块只控制输入，不直接决定 Event 边界。</p>
       <p>自动摘要可能有遗漏或误解，重要内容请对照原始对话核对。</p>
-      <label className="settings-field"><span>自动 Event 执行方式</span><select value={config.pipeline.execution_mode||'legacy'} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,execution_mode:event.target.value}}))}>
+      <label className="settings-field"><span>自动 Event 执行方式</span><select value={config.pipeline.execution_mode||'legacy'} onChange={event=>pipelineOption('execution_mode',event.target.value)}>
         {(!config.pipeline.execution_mode||config.pipeline.execution_mode==='legacy')&&<option value="legacy">沿用旧配置（各阶段分别执行）</option>}<option value="api">API</option><option value="agent">Agent</option></select></label>
       <p>{config.pipeline.execution_mode==='agent'?'通过已认证的 Agent 执行器领取任务。阶段模型选择作为执行提示，执行器需按提示使用相应模型；仅切换此选项不会启动本机 CLI。':'在本页为归线、图片转录、切分、Event 写作分别选模型。图片逐张转录后交给切分和 Writer；图片模型留空时，用切分模型执行转录，该模型仍需视觉能力。图片转录 API 需支持图片和 JSON；Writer 只读文字与转录，不需要视觉能力。'}</p>
       {Object.entries({max_prompt_chars:['完整提示词字符上限',8000,4000000],timeout_seconds:['模型读取超时（秒）',30,1800],event_writer_concurrency:['Event Writer 首轮并发数',1,8],track_lookback_days:['归线 Track 回看天数',1,365]}).map(([key,[label,min,max]])=>
-        <label className="settings-field" key={key}><span>{label}</span><input type="number" min={min} max={max} value={config.pipeline[key] ?? (key==='track_lookback_days'?3:'')} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,[key]:Number(event.target.value)}}))}/></label>)}
+        <label className="settings-field" key={key}><span>{label}</span><input type="number" min={min} max={max} value={config.pipeline[key] ?? (key==='track_lookback_days'?3:'')} onChange={event=>pipelineOption(key,Number(event.target.value))}/></label>)}
       {[
         ['joint_review_enabled','跨线联合审阅','有明确桥接时，让 Curator 一次核对相连的少量 Track；合并 Event 仍须逐字证据。'],
         ['material_review_enabled','逐条材料取舍','让 Curator 标明每条 owned 原话的写作用途，再传给 Writer；来源绑定仍完整保留。'],
@@ -208,15 +220,15 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
         ['append_protected_enabled','受保护 Event 后续追加','若旧 Event 只因叙事卷或 Scene 引用受保护，后续新经历可追加为新版本；旧正文、标题和召回设置保持原样。'],
       ].map(([key,label,help])=><label className="settings-toggle" key={key}><span><strong>{label}</strong><small>{help}</small></span>
         <input type="checkbox" role="switch" checked={config.pipeline[key]===true}
-          onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,[key]:event.target.checked}}))}/></label>)}
+          onChange={event=>pipelineOption(key,event.target.checked)}/></label>)}
       <small>“完整提示词字符上限”是最终模型调用保护，可按所用模型上下文提高到 4000000；修改后下一次继续当前批次即可生效。</small>
       <small>只并发 Curator 已冻结计划后的第一轮 Event Writer；Router、Curator、补读与最终结算保持串行。Agent 模式仍一次领取一个 Writer 任务。默认 1。</small>
       <small>默认回看 3 天（72 小时）：归线读取这段时间内实际归入过原话的 Track，不依赖聊天窗口。旧 Event 不按时间过期；同一 Track 超过 8 条 active leaves 时只 defer 该 Track，避免截断候选后误写。天数修改对新批次生效，已冻结任务保持原材料。</small>
-      <label className="settings-toggle"><span><strong>精简归线候选（实验）</strong><small>候选卡不附旧原话，本轮原话和最近上下文保留。可减少输入量；省略指代较多时可能影响续接判断。</small></span><input type="checkbox" role="switch" checked={config.pipeline.router_compact_cards ?? false} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,router_compact_cards:event.target.checked}}))}/></label>
-      <label className="settings-toggle"><span><strong>检索归线候选（实验）</strong><small>默认关闭，完整带入回看范围内的旧卡。开启后，近线完整带入，较早的卡由程序检索补充；可能漏接或改变分线。</small></span><input type="checkbox" role="switch" checked={config.pipeline.track_candidates_enabled ?? false} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,track_candidates_enabled:event.target.checked}}))}/></label>
+      <label className="settings-toggle"><span><strong>精简归线候选（实验）</strong><small>候选卡不附旧原话，本轮原话和最近上下文保留。可减少输入量；省略指代较多时可能影响续接判断。</small></span><input type="checkbox" role="switch" checked={config.pipeline.router_compact_cards ?? false} onChange={event=>pipelineOption('router_compact_cards',event.target.checked)}/></label>
+      <label className="settings-toggle"><span><strong>检索归线候选（实验）</strong><small>默认关闭，完整带入回看范围内的旧卡。开启后，近线完整带入，较早的卡由程序检索补充；可能漏接或改变分线。</small></span><input type="checkbox" role="switch" checked={config.pipeline.track_candidates_enabled ?? false} onChange={event=>pipelineOption('track_candidates_enabled',event.target.checked)}/></label>
       {config.pipeline.track_candidates_enabled && <>
-        <label className="settings-field"><span>直接带入最近活动的 Track</span><select value={config.pipeline.track_direct_hours ?? 12} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,track_direct_hours:Number(event.target.value)}}))}>{[12,24,48,72].map(hours=><option key={hours} value={hours}>最近 {hours} 小时</option>)}</select></label>
-        <label className="settings-field"><span>额外检索候选上限（默认 8 张）</span><input type="number" min="1" max="50" value={config.pipeline.track_candidate_limit ?? 8} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,track_candidate_limit:Number(event.target.value)}}))}/></label>
+        <label className="settings-field"><span>直接带入最近活动的 Track</span><select value={config.pipeline.track_direct_hours ?? 12} onChange={event=>pipelineOption('track_direct_hours',Number(event.target.value))}>{[12,24,48,72].map(hours=><option key={hours} value={hours}>最近 {hours} 小时</option>)}</select></label>
+        <label className="settings-field"><span>额外检索候选上限（默认 8 张）</span><input type="number" min="1" max="50" value={config.pipeline.track_candidate_limit ?? 8} onChange={event=>pipelineOption('track_candidate_limit',Number(event.target.value))}/></label>
         <small>使用整批新原文和附近前文，搜索旧卡的标题、续接线索及近期原文；程序排除已直接带入的卡并去重。只筛选本次输入，卡片和原文仍完整保存。对新批次生效，已冻结任务保留原输入。</small>
       </>}
       <button type="button" className="settings-link" onClick={onOpenPipeline}>查看整理进度与导入原话</button>
