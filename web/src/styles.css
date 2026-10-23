@@ -7450,6 +7450,13 @@ label:has(input:focus-visible) {
 #settings-content-summary .summary-runtime-settings { margin-top: 32px; }
 .summary-settings-notes { margin-block: 16px 24px; color: var(--muted); font-size: 12px; line-height: 1.75; }
 .summary-settings-notes p { margin-block: 0 10px; }
+#settings-content-summary .settings-toggle { align-items: flex-start; gap: 24px; padding-block: 18px; }
+#settings-content-summary .settings-toggle > span { flex: 1; min-width: 0; gap: 8px; }
+#settings-content-summary .settings-toggle strong { font-size: 15px; line-height: 1.5; }
+#settings-content-summary .settings-toggle small { max-width: 560px; font-size: 13px; line-height: 1.75; }
+#settings-content-summary .settings-toggle input[role="switch"] { margin-top: 2px; }
+.summary-option-group { margin-top: 28px; }
+.summary-option-group h5 { margin: 0 0 4px; color: var(--ink); font-size: 14px; font-weight: 600; }
 .model-assignments { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 22px; }
 .model-assignment { margin-top: 14px; }
 .model-assignment > span { line-height: 1.55; }

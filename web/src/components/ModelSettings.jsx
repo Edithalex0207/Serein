@@ -262,14 +262,15 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
       <p>{config.pipeline.execution_mode==='agent'?'通过已认证的 Agent 执行器领取任务。阶段模型选择作为执行提示，执行器需按提示使用相应模型；仅切换此选项不会启动本机 CLI。':'在本页为归线、图片转录、切分、Event 写作分别选模型。图片逐张转录后交给切分和 Writer；图片模型留空时，用切分模型执行转录，该模型仍需视觉能力。图片转录 API 需支持图片和 JSON；Writer 只读文字与转录，不需要视觉能力。'}</p>
       {Object.entries({max_prompt_chars:['完整提示词字符上限',8000,4000000],timeout_seconds:['模型读取超时（秒）',30,1800],event_writer_concurrency:['Event Writer 首轮并发数',1,8],track_lookback_days:['归线 Track 回看天数',1,365]}).map(([key,[label,min,max]])=>
         <label className="settings-field" key={key}><span>{label}</span><input type="number" min={min} max={max} value={config.pipeline[key] ?? (key==='track_lookback_days'?3:'')} onChange={event=>pipelineOption(key,Number(event.target.value))}/></label>)}
-      {[
+      <div className="summary-option-group"><h5>审阅与写入</h5>{[
         ['joint_review_enabled','跨线联合审阅','有明确桥接时，让 Curator 一次核对相连的少量 Track；合并 Event 仍须逐字证据。'],
         ['material_review_enabled','逐条材料取舍','让 Curator 标明每条 owned 原话的写作用途，再传给 Writer；来源绑定仍完整保留。'],
         ['round_gate_enabled','普通交流轮次门槛','至少两轮完整交流才进入 Writer；未结束的短段等待后续原话，明确结束的短段跳过。'],
         ['append_protected_enabled','受保护 Event 后续追加','若旧 Event 只因叙事卷或 Scene 引用受保护，后续新经历可追加为新版本；旧正文、标题和召回设置保持原样。'],
       ].map(([key,label,help])=><label className="settings-toggle" key={key}><span><strong>{label}</strong><small>{help}</small></span>
         <input type="checkbox" role="switch" checked={config.pipeline[key]===true}
-          onChange={event=>pipelineOption(key,event.target.checked)}/></label>)}
+          onChange={event=>pipelineOption(key,event.target.checked)}/></label>)}</div>
+      <div className="summary-option-group"><h5>归线候选实验</h5>
       <label className="settings-toggle"><span><strong>精简归线候选（实验）</strong><small>候选卡不附旧原话，本轮原话和最近上下文保留。可减少输入量；省略指代较多时可能影响续接判断。</small></span><input type="checkbox" role="switch" checked={config.pipeline.router_compact_cards ?? false} onChange={event=>pipelineOption('router_compact_cards',event.target.checked)}/></label>
       <label className="settings-toggle"><span><strong>检索归线候选（实验）</strong><small>默认关闭，完整带入回看范围内的旧卡。开启后，近线完整带入，较早的卡由程序检索补充；可能漏接或改变分线。</small></span><input type="checkbox" role="switch" checked={config.pipeline.track_candidates_enabled ?? false} onChange={event=>pipelineOption('track_candidates_enabled',event.target.checked)}/></label>
       {config.pipeline.track_candidates_enabled && <>
@@ -277,6 +278,7 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
         <label className="settings-field"><span>额外检索候选上限（默认 8 张）</span><input type="number" min="1" max="50" value={config.pipeline.track_candidate_limit ?? 8} onChange={event=>pipelineOption('track_candidate_limit',Number(event.target.value))}/></label>
         <small>使用整批新原文和附近前文，搜索旧卡的标题、续接线索及近期原文；程序排除已直接带入的卡并去重。只筛选本次输入，卡片和原文仍完整保存。对新批次生效，已冻结任务保留原输入。</small>
       </>}
+      </div>
       <button type="button" className="settings-link" onClick={onOpenPipeline}>查看整理进度与导入原话</button>
     </section>
           <AgentGuide label="配置 Agent 整理 Event" />
