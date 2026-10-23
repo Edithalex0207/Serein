@@ -1,6 +1,7 @@
 """Private live tool surface: Germany Scene/Diary capabilities, no public authoring."""
 from mcp.types import ToolAnnotations
 from ..compat.scenes import Scenes
+from ..compat.events import Events
 from ..compat.diaries import Diaries
 from ..core.personal import Personal
 
@@ -19,6 +20,10 @@ def add_tools(server,settings):
     def set_scene_status(scene_id:str,expected_updated_at:str,status:str):
         """Set a Scene active or archived, with its current updated_at. Deleted is a retained soft deletion."""
         return scenes.edit(scene_id,expected_updated_at,status=status)
+
+    def edit_event(event_id:str,expected_updated_at:str,title:str|None=None,content:str|None=None):
+        """Correct an active Event using its ID and updated_at from read_memory. Returns a new event_id, retaining the old version and original evidence. Omitted title/content stay unchanged; stale edits conflict."""
+        return Events(settings.database).edit(event_id,expected_updated_at,title=title,content=content)
 
     def read_diary(diary_id:int|None=None,date:str='',limit:int=20):
         """Read diaries by ID or date, respecting locked/deleted entries."""
@@ -46,5 +51,9 @@ def add_tools(server,settings):
 
     for fn in (read_diary,read_favorites):
         server.add_tool(fn,annotations=ToolAnnotations(readOnlyHint=True,openWorldHint=False))
-    for fn in (write_scene,edit_scene,set_scene_status,personal.annotate,write_diary,revise_diary,delete_diary,comment_diary):
+    for fn in (write_scene,edit_scene,edit_event,set_scene_status,personal.annotate,write_diary,revise_diary,delete_diary,comment_diary):
         server.add_tool(fn,annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=fn in (set_scene_status,delete_diary),openWorldHint=False))
+    tool=server._tool_manager.get_tool('edit_event')
+    tool.fn_metadata.arg_model.model_config['extra']='forbid'
+    tool.fn_metadata.arg_model.model_rebuild(force=True)
+    tool.parameters['additionalProperties']=False

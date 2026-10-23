@@ -90,8 +90,10 @@ def test_temporary_download_failure_is_not_a_missing_original(settings, monkeypa
     monkeypatch.setattr('serein.extensions.pipeline_images.image_bytes', timeout)
     async def runner(role, request):
         return output_for(role, request)
-    with pytest.raises(TimeoutError):
-        asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))
+    result = asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))
+    assert result['events'] == 1 and result['processed_originals'] == 2
+    assert result['missing_images'][0]['reason'] == 'original_unavailable'
+    assert result['missing_images'][0]['reason'] != 'original_missing'
 
 
 def test_reply_to_other_user_does_not_count_as_an_owned_round():

@@ -9,6 +9,7 @@ from pydantic import StrictBool
 
 from ..compat.diaries import Diaries, project_diaries
 from ..compat.scenes import Scenes, sources
+from ..compat.events import Events
 from ..core.personal import Personal
 from ..core.store import Store, now
 from ..deployment import read_settings
@@ -101,6 +102,11 @@ def tools_for(services, settings):
         """Set a Scene active, archived or deleted using its current updated_at. Lifecycle changes preserve the manual surfacing switch. Explicit restore_surface=true with active also enables surfacing in the same transaction. Deleted is a retained soft deletion. Events cannot be changed through this tool."""
         return sync_scene(scenes.edit(scene_id, expected_updated_at, status=status, restore_surface=restore_surface))
 
+    def edit_event(event_id: str, expected_updated_at: str, title: str | None = None,
+                   content: str | None = None):
+        """Correct an active Event after read_memory: pass its ID and updated_at, with changed title/content. Omitted fields and original evidence are preserved. Returns a new event_id and retains the old version. Stale edits conflict."""
+        return Events(settings.database).edit(event_id, expected_updated_at, title=title, content=content)
+
     def write_diary(content: str, date: str = '', title: str = '', unlock_at: str = ''):
         """Write an AI-authored diary. Date defaults to today (UTC+8). A future unlock_at creates a sealed entry. IDs are generated internally; no kind or revision is needed. Use revise_diary for edits. Check existing entries before retrying a lost response."""
         return notebook('create', write=True, content=content, date=date, title=title, author='ai', unlock_at=unlock_at)
@@ -122,6 +128,6 @@ def tools_for(services, settings):
         return personal.annotate(memory_id, content, author or read_settings(settings.database)['identity']['ai_name'],
                                  role, annotation_id)
 
-    tools.update({fn.__name__: fn for fn in (write_scene, edit_scene, set_scene_status, write_diary,
+    tools.update({fn.__name__: fn for fn in (write_scene, edit_scene, edit_event, set_scene_status, write_diary,
                                            revise_diary, comment_diary, delete_diary, annotate)})
     return tools

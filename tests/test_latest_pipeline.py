@@ -17,6 +17,11 @@ def curator_task(settings):
         p.submit(settings.database,task['job_id'],output_for(task['role'],task['request']))
         task=asyncio.run(p.advance(settings.database,include_recent=True))
     assert task['role']=='event_curator'
+    # These are host validator tests. Agent transport intentionally omits the
+    # host's full evidence snapshot; reload that snapshot for direct validation.
+    with Store(settings.database,read_only=True) as store:
+        task['request']=json.loads(store.conn.execute(
+            'SELECT request_json FROM pipeline_jobs WHERE id=?',(task['job_id'],)).fetchone()[0])
     return task
 
 
@@ -918,7 +923,7 @@ def test_failed_image_finishes_summary_and_manual_retry_remains_available(settin
         {'source_event_id':'other-a','session_id':'other','role':'assistant','text':'Independent synthetic answer','created_at':'2025-01-01T00:03:00Z'}],source='test')
     assert asyncio.run(p.advance(settings.database,include_recent=True,runner=failing))['events']==1
     assert asyncio.run(p.advance(settings.database,include_recent=True,runner=failing))['status']=='current'
-    assert len(calls)==2
+    assert len(calls)==1  # Unread old candidates do not retry their failed images.
     from fastapi.testclient import TestClient
     from serein.api.http import create_app
     client=TestClient(create_app(settings,token='test',live=True),headers={'Authorization':'Bearer test'})
@@ -928,7 +933,7 @@ def test_failed_image_finishes_summary_and_manual_retry_remains_available(settin
     from serein.work_tasks import enqueue, pause
     enqueue(settings.database,'pipeline')
     assert client.post('/v1/pipeline/retry-image',json={'sha256':calls[0]}).json()['status']=='busy'
-    assert image_failures(settings.database,calls[0])==2
+    assert image_failures(settings.database,calls[0])==1
     pause(settings.database,'pipeline')
     assert client.post('/v1/pipeline/retry-image',json={'sha256':calls[0]}).status_code==200
     async def success(role,request):

@@ -92,9 +92,11 @@ def test_stdio_mcp_write_read_recall_and_retry(tmp_path):
                 assert 'promote_event_to_scene' not in names
                 save_settings(database, {'features': {'event_to_scene': True}})
                 assert 'promote_event_to_scene' in {t.name for t in (await session.list_tools()).tools}
+                Application(Settings(database, writable=True)).services.write('select-stdio', 'mailbox_select', {
+                    'event_id': 'event_stdio', 'expected_revision': 1, 'expected_queue_revision': 0})
                 promoted = await session.call_tool('promote_event_to_scene', {
-                    'operation_id':'mcp-promote', 'event_id':'event_stdio', 'expected_revision':1,
-                    'title':'主窗口的归航', 'body_md':'我记得那天的雨。'})
+                    'candidate_id':'event_stdio', 'title':'主窗口的归航',
+                    'body':'我记得那天的雨。', 'cues':'归航｜雨天'})
                 assert not promoted.isError
                 assert promoted.structuredContent['event_surface']['reasons'] == ['promoted_to_scene', 'covered_by_scene']
                 scene = await session.call_tool('read_memory', {'identifier':promoted.structuredContent['id']})
